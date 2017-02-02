@@ -246,12 +246,27 @@ class SqlFormatter
         // Comment
         if ((isset($string[1]) && ($string[0] === '-' && $string[1] === '-') || ($string[0] === '/' && $string[1] === '*'))) {
             // Comment until end of line
-            if ($string[0] === '-' || $string[0] === '#') {
-                $last = mb_strpos($string, "\n");
+            if ($string[0] === '-') {
                 $type = self::TOKEN_TYPE_COMMENT;
-            } else { // Comment until closing comment tag
-                $last = mb_strpos($string, "*/", 2) + 2;
+                $last = mb_strpos($string, "\n");
+            } else { // Comment until closing comment tag (may be nested)
                 $type = self::TOKEN_TYPE_BLOCK_COMMENT;
+                $level = 1; $offset = 2;
+                $finish = mb_strlen($string);
+                do {
+                    $last = mb_strpos($string, "*/", $offset);
+                    if ($last === false) break;
+                    $nextOpen = mb_strpos($string, "/*", $offset);
+                    if ($nextOpen === false) $nextOpen = $finish;
+                    if ($nextOpen < $last) {
+                        $level++;
+                        $offset = $nextOpen + 2;
+                    } else {
+                        $level--;
+                        $last += 1;
+                        $offset = $last;
+                    }
+                } while ($level && $last);
             }
 
             if ($last === false) {
@@ -558,9 +573,8 @@ class SqlFormatter
                 if ($TOKEN_TYPE === self::TOKEN_TYPE_BLOCK_COMMENT) {
                     $indent = str_repeat($tab, $indent_level);
                     $return .= "\n" . $indent;
-                    $highlighted = str_replace("\n", "\n" . $indent, $highlighted); // TODO: The same, really?
+                    $highlighted = str_replace("\n", "\n" . $indent, $highlighted);
                 }
-
                 $return .= $highlighted;
                 $newline = true;
                 continue;
