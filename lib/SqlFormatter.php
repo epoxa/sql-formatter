@@ -249,7 +249,8 @@ class SqlFormatter
             if ($string[0] === '-') {
                 $type = self::TOKEN_TYPE_COMMENT;
                 $last = mb_strpos($string, "\n");
-            } else { // Comment until closing comment tag (may be nested)
+            } else {
+            // Comment until closing comment tag (may be nested)
                 $type = self::TOKEN_TYPE_BLOCK_COMMENT;
                 $level = 1; $offset = 2;
                 $finish = mb_strlen($string);
