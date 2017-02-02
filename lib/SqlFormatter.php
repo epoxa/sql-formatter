@@ -247,11 +247,26 @@ class SqlFormatter
         if ((isset($string[1]) && ($string[0] === '-' && $string[1] === '-') || ($string[0] === '/' && $string[1] === '*'))) {
             // Comment until end of line
             if ($string[0] === '-' || $string[0] === '#') {
-                $last = mb_strpos($string, "\n");
                 $type = self::TOKEN_TYPE_COMMENT;
-            } else { // Comment until closing comment tag
-                $last = mb_strpos($string, "*/", 2) + 2;
+                $last = mb_strpos($string, "\n");
+            } else { // Comment until closing comment tag (may be nested)
                 $type = self::TOKEN_TYPE_BLOCK_COMMENT;
+                $level = 1; $offset = 2;
+                $finish = mb_strlen($string);
+                do {
+                    $last = mb_strpos($string, "*/", $offset);
+                    if ($last === false) break;
+                    $nextOpen = mb_strpos($string, "/*", $offset);
+                    if ($nextOpen === false) $nextOpen = $finish;
+                    if ($nextOpen < $last) {
+                        $level++;
+                        $offset = $nextOpen + 2;
+                    } else {
+                        $level--;
+                        $last += 2;
+                        $offset = $last;
+                    }
+                } while ($level && $last);
             }
 
             if ($last === false) {
