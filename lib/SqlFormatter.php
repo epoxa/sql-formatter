@@ -29,6 +29,8 @@ class SqlFormatter
     const TOKEN_TYPE_NUMBER = 10;
     const TOKEN_TYPE_ERROR = 11;
     const TOKEN_TYPE_VARIABLE = 12;
+    const TOKEN_TYPE_RESERVED_NEWLINE_TOPLEVEL = 13;
+
 
     // Constants for different components of a token
     const TOKEN_TYPE = 0;
@@ -89,6 +91,10 @@ class SqlFormatter
     protected static $reserved_newline = array(
         'LEFT OUTER JOIN', 'RIGHT OUTER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'OUTER JOIN', 'INNER JOIN', 'JOIN', 'XOR', 'OR', 'AND',
         'ROLLBACK', 'COMMIT',
+    );
+
+    protected static $reserved_newline_toplevel = array(
+        'BEGIN TRY', 'BEGIN CATCH',
     );
 
 
@@ -171,6 +177,7 @@ class SqlFormatter
     protected static $regex_reserved;
     protected static $regex_reserved_newline;
     protected static $regex_reserved_toplevel;
+    protected static $regex_reserved_newline_toplevel;
     protected static $regex_function;
 
     // Cache variables
@@ -210,9 +217,9 @@ class SqlFormatter
         // Set up regular expressions
         self::$regex_boundaries = '(' . implode('|', array_map(array(__CLASS__, 'quote_regex'), self::$boundaries)) . ')';
         self::$regex_reserved = '(' . implode('|', array_map(array(__CLASS__, 'quote_regex'), self::$reserved)) . ')';
-        self::$regex_reserved_toplevel = str_replace(' ', '\\s+',
-            '(' . implode('|', array_map(array(__CLASS__, 'quote_regex'), self::$reserved_toplevel)) . ')');
+        self::$regex_reserved_toplevel = str_replace(' ', '\\s+', '(' . implode('|', array_map(array(__CLASS__, 'quote_regex'), self::$reserved_toplevel)) . ')');
         self::$regex_reserved_newline = str_replace(' ', '\\s+', '(' . implode('|', array_map(array(__CLASS__, 'quote_regex'), self::$reserved_newline)) . ')');
+        self::$regex_reserved_newline_toplevel = str_replace(' ', '\\s+', '(' . implode('|', array_map(array(__CLASS__, 'quote_regex'), self::$reserved_newline_toplevel)) . ')');
 
         self::$regex_function = '(' . implode('|', array_map(array(__CLASS__, 'quote_regex'), self::$functions)) . ')';
 
@@ -302,7 +309,7 @@ class SqlFormatter
                 $ret[self::TOKEN_VALUE] = $string[0] . self::getQuotedString(mb_substr($string, 1));
             } // Non-quoted variable name
             else {
-                preg_match('/^(' . $string[0] . '[a-zA-Z0-9\._\$]+)/', $string, $matches);
+                preg_match('/^(' . $string[0] . '[А-Яа-яa-zA-Z0-9\._\$]+)/u', $string, $matches);
                 if ($matches) {
                     $ret[self::TOKEN_VALUE] = $matches[1];
                 }
@@ -342,6 +349,13 @@ class SqlFormatter
             if (preg_match('/^(' . self::$regex_reserved_newline . ')($|\s|' . self::$regex_boundaries . ')/', $upper, $matches)) {
                 return array(
                     self::TOKEN_TYPE => self::TOKEN_TYPE_RESERVED_NEWLINE,
+                    self::TOKEN_VALUE => mb_substr($string, 0, mb_strlen($matches[1])),
+                );
+            }
+            // Newline & Top Level Reserved Word
+            if (preg_match('/^(' . self::$regex_reserved_newline_toplevel . ')($|\s|' . self::$regex_boundaries . ')/', $upper, $matches)) {
+                return array(
+                    self::TOKEN_TYPE => self::TOKEN_TYPE_RESERVED_NEWLINE_TOPLEVEL,
                     self::TOKEN_VALUE => mb_substr($string, 0, mb_strlen($matches[1])),
                 );
             }
@@ -549,6 +563,23 @@ class SqlFormatter
                 $highlighted = $token[self::TOKEN_VALUE];
             }
 
+            if ($TOKEN_TYPE === self::TOKEN_TYPE_RESERVED_NEWLINE_TOPLEVEL) {
+
+                if (count($indent_types) && $indent_types[0] === 'special') {
+                    array_shift($indent_types);
+                    $indent_level--;
+                }
+
+                $newline = true;
+
+                // If the token may have extra whitespace
+                if (mb_strpos($TOKEN_VALUE, ' ') !== false || mb_strpos($TOKEN_VALUE, "\n") !== false
+                    || mb_strpos($TOKEN_VALUE, "\t") !== false
+                ) {
+                    $highlighted = preg_replace('/\s+/', ' ', $highlighted);
+                }
+            }
+
             // If we need a new line before the token
             if ($newline) {
                 if ($increase_indent_type) {
@@ -611,8 +642,10 @@ class SqlFormatter
 
             // Keywords BEGIN and CASE increase the text indent level and start a new line
             $startTextBlock = $TOKEN_VALUE === 'CASE'
-                || $TOKEN_VALUE === 'BEGIN' && ! in_array($NEXT_VALUE, ['TRANSACTION', 'TRANS', 'TRY', 'CATCH'])
-                || $LAST_VALUE === 'BEGIN' && in_array($TOKEN_VALUE, ['TRY', 'CATCH']);
+                || $TOKEN_VALUE === 'BEGIN' && ! in_array($NEXT_VALUE, ['TRANSACTION', 'TRANS'])
+                || $LAST_VALUE === 'BEGIN' && in_array($TOKEN_VALUE, ['TRY', 'CATCH'])
+                || in_array($TOKEN_VALUE, ['BEGIN TRY', 'BEGIN CATCH'])
+                ;
             if ($startTextBlock) {
 
                 $increase_indent_type = 'text';
@@ -675,7 +708,9 @@ class SqlFormatter
                     }
 
                     // Reached an invalid token type for inline parentheses
-                    if ($next[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED_TOPLEVEL || $next[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED_NEWLINE
+                    if ($next[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED_TOPLEVEL
+                        || $next[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED_NEWLINE
+                        || $next[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED_NEWLINE_TOPLEVEL
                         || $next[self::TOKEN_TYPE] === self::TOKEN_TYPE_COMMENT
                         || $next[self::TOKEN_TYPE] === self::TOKEN_TYPE_BLOCK_COMMENT
                         || $next[self::TOKEN_TYPE] === self::TOKEN_TYPE_EMPTY_LINE
@@ -742,7 +777,7 @@ class SqlFormatter
                 $newline = true;
 
             } // Top level reserved words start a new line and increase the special indent level
-            elseif ($TOKEN_TYPE === self::TOKEN_TYPE_RESERVED_TOPLEVEL) {
+            elseif ($TOKEN_TYPE === self::TOKEN_TYPE_RESERVED_TOPLEVEL || $TOKEN_TYPE === self::TOKEN_TYPE_RESERVED_NEWLINE_TOPLEVEL) {
                 $increase_indent_type = 'special';
 
                 // If the last indent type was 'special', decrease the special indent for this round
@@ -772,7 +807,7 @@ class SqlFormatter
             elseif ($TOKEN_VALUE === ',' && !$inline_parentheses) {
                 $newline = true;
             } // Newline reserved words start a new line
-            elseif ($TOKEN_TYPE === self::TOKEN_TYPE_RESERVED_NEWLINE) {
+            elseif ($TOKEN_TYPE === self::TOKEN_TYPE_RESERVED_NEWLINE || $TOKEN_TYPE === self::TOKEN_TYPE_RESERVED_NEWLINE_TOPLEVEL) {
                 // Add a newline before the reserved word (if not already added)
                 if (!$added_newline) {
                     $return .= "\n" . str_repeat($tab, $indent_level);
@@ -795,7 +830,7 @@ class SqlFormatter
 
             // Uppercase reserved words
             if (self::$uppercase
-                && in_array($TOKEN_TYPE, array(self::TOKEN_TYPE_RESERVED, self::TOKEN_TYPE_RESERVED_NEWLINE, self::TOKEN_TYPE_RESERVED_TOPLEVEL))
+                && in_array($TOKEN_TYPE, array(self::TOKEN_TYPE_RESERVED, self::TOKEN_TYPE_RESERVED_NEWLINE, self::TOKEN_TYPE_RESERVED_TOPLEVEL, self::TOKEN_TYPE_RESERVED_NEWLINE_TOPLEVEL))
             ) {
                 $highlighted = strtoupper($highlighted);
             }
@@ -959,7 +994,7 @@ class SqlFormatter
                 continue;
             } // Remove extra whitespace in reserved words (e.g "OUTER     JOIN" becomes "OUTER JOIN")
             elseif ($token[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED || $token[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED_NEWLINE
-                || $token[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED_TOPLEVEL
+                || $token[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED_TOPLEVEL || $token[self::TOKEN_TYPE] === self::TOKEN_TYPE_RESERVED_NEWLINE_TOPLEVEL
             ) {
                 $token[self::TOKEN_VALUE] = preg_replace('/\s+/', ' ', $token[self::TOKEN_VALUE]);
             }
@@ -1016,7 +1051,9 @@ class SqlFormatter
             return self::highlightReservedWord($token);
         } elseif ($type === self::TOKEN_TYPE_RESERVED_TOPLEVEL) {
             return self::highlightReservedWord($token);
-        } elseif ($type === self::TOKEN_TYPE_RESERVED_NEWLINE) {
+        } elseif ($type === self::TOKEN_TYPE_RESERVED_NEWLINE_TOPLEVEL) {
+            return self::highlightReservedWord($token);
+        } elseif ($type === self::TOKEN_TYPE_RESERVED_NEWLINE   ) {
             return self::highlightReservedWord($token);
         } elseif ($type === self::TOKEN_TYPE_NUMBER) {
             return self::highlightNumber($token);
